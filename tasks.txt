@@ -1,0 +1,3 @@
+chrom, ica
+for all 31+ regions
+empty cnn
