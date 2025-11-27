@@ -3,3 +3,4 @@ pandas
 mediapipe
 scipy
 numpy
+scikit-learn
