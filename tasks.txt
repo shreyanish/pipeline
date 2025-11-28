@@ -1,3 +1,8 @@
 chrom, ica
 for all 31+ regions
-empty cnn
+
+deep learning models to test roi directly -- codemag face recognition (work focused on face and not hand)
+algorithms to convert roi to rppg -- 10 to 15 (5 from dl & 10 algo based)
+add new and simpler matrices (over r_ratio)
+update codebase modularly
+print signals w output (check how to evaluate quality of rppg signal)
