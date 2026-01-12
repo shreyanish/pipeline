@@ -8,7 +8,8 @@ import numpy as np
 import sys
 sys.path.insert(0, '/Users/shreyanish/Dev/sop_prelim')
 
-from pipeline import process_signal_pos, process_signal_chrom, process_signal_ica, extract_spo2_features
+from rppg_algorithms import process_signal_pos, process_signal_chrom, process_signal_ica
+from feature_extraction import extract_spo2_features
 
 print("="*60)
 print("Test 1: Algorithm Output Validation")
@@ -68,7 +69,8 @@ print("\n" + "="*60)
 print("Test 3: Region Configuration Validation")
 print("="*60)
 
-from pipeline import ALL_REGIONS, RPPG_METHODS, SELECTED_REGIONS
+from roi_definitions import ALL_REGIONS
+from config import RPPG_METHODS, SELECTED_REGIONS
 
 print(f"\nTotal regions defined: {len(ALL_REGIONS)}")
 print(f"rPPG methods configured: {', '.join(RPPG_METHODS)}")
