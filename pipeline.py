@@ -1,27 +1,22 @@
 import os
-import pandas as pd
+import matplotlib.pyplot as plt
 import numpy as np
 
-from config import VIDEO_FOLDER, GROUND_TRUTH_FILE, OUTPUT_FILE, RPPG_METHODS, SELECTED_REGIONS
+from config import VIDEO_FOLDER, RPPG_METHODS, SELECTED_REGIONS
 from roi_definitions import ALL_REGIONS
 from signal_extraction import get_raw_rgb_signal
-from rppg_algorithms import process_signal_pos, process_signal_chrom, process_signal_ica
-from feature_extraction import extract_spo2_features
+from rppg_algorithms import (process_signal_pos, process_signal_chrom, process_signal_ica, process_signal_ssr,
+                             process_signal_green, process_signal_pca, process_signal_pbv, process_signal_lgi,
+                             process_signal_omit, process_signal_samc, process_signal_2sr)
+from evaluation import evaluate_algorithms
 
-def run_pipeline(video_folder, gt_file):
-    print("=== Starting Multi-Region Multi-Algorithm rPPG SpO2 Pipeline ===")
+def run_pipeline(video_folder, max_frames=None, ground_truth_signal=None):
+    print("=== Starting Multi-Region Multi-Algorithm rPPG Pipeline ===")
     
-    # 1. Data Curation (Load and map ground truth)
-    try:
-        gt_df = pd.read_csv(gt_file)
-        gt_map = gt_df.set_index("Video File Name")["Oxygen Level"].to_dict()
-    except FileNotFoundError:
-        print(f"Error: Ground truth file not found at {gt_file}.")
-        return
-    except KeyError:
-        print("Error: Ground truth file must contain 'Video File Name' and 'Oxygen Level' columns.")
-        return
-
+    # Create plots directory if it doesn't exist
+    plots_dir = "plots"
+    os.makedirs(plots_dir, exist_ok=True)
+    
     # Determine which regions to test
     if SELECTED_REGIONS == 'ALL':
         regions_to_test = ALL_REGIONS
@@ -33,87 +28,104 @@ def run_pipeline(video_folder, gt_file):
     print(f"  - Testing {len(RPPG_METHODS)} rPPG methods: {', '.join(RPPG_METHODS)}")
     print(f"  - Total combinations per video: {len(regions_to_test) * len(RPPG_METHODS)}\n")
 
-    final_dataset = []
-    
     # Iterate through all video files in the specified folder
     for video_file in os.listdir(video_folder):
         if video_file.lower().endswith(('.mp4', '.avi', '.mov')):
             video_id = os.path.splitext(video_file)[0]
             video_path = os.path.join(video_folder, video_file)
 
-            if video_id in gt_map:
-                print(f"\n{'='*60}")
-                print(f"Processing video: {video_file}")
-                print(f"{'='*60}")
+            print(f"\n{'='*60}")
+            print(f"Processing video: {video_file}")
+            print(f"{'='*60}")
+            
+            # Iterate through all regions
+            for region_name, region_indices in regions_to_test.items():
+                print(f"\n  Region: {region_name}")
                 
-                # Iterate through all regions
-                for region_name, region_indices in regions_to_test.items():
-                    print(f"\n  Region: {region_name}")
-                    
-                    # Extract raw RGB signal for this region
-                    raw_signal, fps = get_raw_rgb_signal(video_path, region_indices)
-                    
-                    if raw_signal is None or raw_signal.shape[0] < 100:
-                        print(f"    ⚠ Skipping region {region_name}: Failed to extract signal or too few frames")
+                extracted_signals = {}  # Store signals for plotting
+                
+                # Extract raw RGB signal for this region
+                raw_signal, fps = get_raw_rgb_signal(video_path, region_indices, max_frames=max_frames)
+                
+                if raw_signal is None or raw_signal.shape[0] < 100:
+                    print(f"    ⚠ Skipping region {region_name}: Failed to extract signal or too few frames")
+                    continue
+                
+                # Test each rPPG method on this signal
+                for method in RPPG_METHODS:
+                    # Apply the appropriate rPPG algorithm
+                    if method == 'POS':
+                        filtered_bvp = process_signal_pos(raw_signal, fps)
+                    elif method == 'CHROM':
+                        filtered_bvp = process_signal_chrom(raw_signal, fps)
+                    elif method == 'ICA':
+                        filtered_bvp = process_signal_ica(raw_signal, fps)
+                    elif method == 'SSR':
+                        filtered_bvp = process_signal_ssr(raw_signal, fps)
+                    elif method == 'GREEN':
+                        filtered_bvp = process_signal_green(raw_signal, fps)
+                    elif method == 'PCA':
+                        filtered_bvp = process_signal_pca(raw_signal, fps)
+                    elif method == 'PBV':
+                        filtered_bvp = process_signal_pbv(raw_signal, fps)
+                    elif method == 'LGI':
+                        filtered_bvp = process_signal_lgi(raw_signal, fps)
+                    elif method == 'OMIT':
+                        filtered_bvp = process_signal_omit(raw_signal, fps)
+                    elif method == 'SAMC':
+                        filtered_bvp = process_signal_samc(raw_signal, fps)
+                    elif method == '2SR':
+                        filtered_bvp = process_signal_2sr(raw_signal, fps)
+                    else:
+                        print(f"    ⚠ Unknown method: {method}")
                         continue
-                    
-                    # Test each rPPG method on this signal
-                    for method in RPPG_METHODS:
-                        # Apply the appropriate rPPG algorithm
-                        if method == 'POS':
-                            filtered_bvp = process_signal_pos(raw_signal, fps)
-                        elif method == 'CHROM':
-                            filtered_bvp = process_signal_chrom(raw_signal, fps)
-                        elif method == 'ICA':
-                            filtered_bvp = process_signal_ica(raw_signal, fps)
-                        else:
-                            print(f"    ⚠ Unknown method: {method}")
-                            continue
-                        
-                        # Extract SpO2 features
-                        features = extract_spo2_features(raw_signal, filtered_bvp, fps)
-                        
-                        if not features or (features.get('R_Ratio') is None and features.get('R_Green_Blue') is None):
-                            print(f"    ⚠ {method}: Failed to extract features")
-                            continue
-                        
-                        # Append the results to the final dataset
-                        row = {
-                            'Video_ID': video_id,
-                            'Region_Name': region_name,
-                            'rPPG_Method': method,
-                            'SpO2_Ground_Truth': gt_map[video_id],
-                            **features  # Unpack the calculated features
-                        }
-                        final_dataset.append(row)
-                        
-                        # Print summary
-                        r_ratio = features.get('R_Ratio', np.nan)
-                        r_gb = features.get('R_Green_Blue', np.nan)
-                        print(f"    ✓ {method}: R_Ratio={r_ratio:.3f}, R_Green/Blue={r_gb:.3f}")
-                
-                print(f"\n  → Completed {video_id}: {len([r for r in final_dataset if r['Video_ID'] == video_id])} region-method combinations")
-            else:
-                print(f"\n⚠ Skipping {video_file}: No matching SpO2 label found in ground truth.")
 
-    # Save the final ML-ready dataset
-    if final_dataset:
-        output_df = pd.DataFrame(final_dataset)
-        output_df.to_csv(OUTPUT_FILE, index=False)
-        print(f"\n{'='*60}")
-        print("=== Pipeline Complete ===")
-        print(f"{'='*60}")
-        print(f"Successfully processed {len(output_df['Video_ID'].unique())} videos")
-        print(f"Total rows in dataset: {len(output_df)}")
-        print(f"Regions tested: {len(output_df['Region_Name'].unique())}")
-        print(f"Methods tested: {', '.join(output_df['rPPG_Method'].unique())}")
-        print(f"Output saved to: {OUTPUT_FILE}")
-    else:
-        print("\n⚠ No data was processed. Please check your video files and ground truth.")
+                    # Store signal for plotting
+                    if len(filtered_bvp) > 0:
+                        extracted_signals[method] = filtered_bvp
+                        print(f"    ✓ {method}: Signal extracted ({len(filtered_bvp)} samples)")
+                    else:
+                        print(f"    ⚠ {method}: Failed to extract signal")
+            
+                # Evaluate algorithms if ground truth is provided
+                if ground_truth_signal is not None and len(extracted_signals) > 0:
+                    print(f"\n  Evaluation Metrics (rBS):")
+                    eval_results = evaluate_algorithms(ground_truth_signal, extracted_signals)
+                    # Sort by rBS (higher is better)
+                    sorted_results = sorted(eval_results.items(), key=lambda x: x[1]['rBS'], reverse=True)
+                    for method, metrics in sorted_results:
+                        print(f"    {method:6s} | rBS: {metrics['rBS']:7.3f} | PCC: {metrics['PCC']:6.3f} | MAE: {metrics['MAE']:6.3f} | RMSE: {metrics['RMSE']:6.3f}")
+            
+                # Plot signals for this region
+                if extracted_signals:
+                    plt.figure(figsize=(12, 6))
+                    for method, signal in extracted_signals.items():
+                        # Normalize signal for better comparison in plot
+                        if np.std(signal) != 0:
+                            norm_signal = (signal - np.mean(signal)) / np.std(signal)
+                            plt.plot(norm_signal, label=method, alpha=0.7)
+                    
+                    plt.title(f"rPPG Signals - {video_id} - {region_name}")
+                    plt.xlabel("Frame")
+                    plt.ylabel("Normalized Amplitude")
+                    plt.legend()
+                    plt.grid(True, alpha=0.3)
+                    plt.tight_layout()
+                    plot_path = os.path.join(plots_dir, f"{video_id}_{region_name}.png")
+                    plt.savefig(plot_path)
+                    plt.close()
+                    print(f"    📊 Plot saved: {plot_path}")
+            
+            print(f"\n  → Completed {video_id}")
+
+    print(f"\n{'='*60}")
+    print("=== Pipeline Complete ===")
+    print(f"{'='*60}")
+    print(f"Plots saved to: {plots_dir}/")
     
     
 if __name__ == "__main__":
-    if os.path.exists(VIDEO_FOLDER) and os.path.exists(GROUND_TRUTH_FILE):
-        run_pipeline(VIDEO_FOLDER, GROUND_TRUTH_FILE)
+    if os.path.exists(VIDEO_FOLDER):
+        run_pipeline(VIDEO_FOLDER)
     else:
-        print("Please ensure 'data' folder and 'ground_truth.csv' exist.")
+        print(f"Please ensure '{VIDEO_FOLDER}' folder exists.")

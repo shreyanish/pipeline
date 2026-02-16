@@ -1,6 +1,8 @@
-opencv-python
+opencv-python-headless
 pandas
 mediapipe
 scipy
 numpy
 scikit-learn
+matplotlib
+tqdm
