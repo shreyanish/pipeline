@@ -264,6 +264,101 @@ def generate_ensemble_plots(signal_collection, plots_dir, target_length=1800):
     logger.info(f"  ✓ Saved global summary plot to: {plot_path}")
 
 
+def generate_single_video_plots(video_path, regions_to_test, max_frames, plots_dir, use_gpu=False):
+    """
+    Process a single video and generate one plot per algorithm,
+    showing rPPG signals for all regions overlaid.
+
+    Args:
+        video_path: Path to video file
+        regions_to_test: Dict of region names to landmark indices
+        max_frames: Maximum frames to process
+        plots_dir: Output directory for plots
+        use_gpu: Whether to use GPU
+    """
+    from signal_extraction import get_all_regions_signals
+
+    logger.info(f"Generating single-video plots for: {os.path.basename(video_path)}")
+
+    try:
+        all_signals, fps = get_all_regions_signals(video_path, regions_to_test, max_frames=max_frames)
+    except Exception as e:
+        logger.error(f"Failed to extract signals for single-video plot: {e}")
+        return
+
+    device = 'cpu'
+    if use_gpu and TORCH_AVAILABLE:
+        if torch.cuda.is_available():
+            device = 'cuda'
+        elif torch.backends.mps.is_available():
+            device = 'mps'
+
+    # For each algorithm, collect signals from all regions and plot
+    for method in RPPG_METHODS:
+        plt.figure(figsize=(16, 8))
+        plotted = 0
+
+        for region_name, raw_signal in all_signals.items():
+            if raw_signal is None or raw_signal.shape[0] < 100:
+                continue
+
+            filtered_bvp = []
+
+            if use_gpu and TORCH_AVAILABLE and device != 'cpu':
+                try:
+                    fn_map = {
+                        'POS': rppg_pytorch.process_signal_pos_torch,
+                        'CHROM': rppg_pytorch.process_signal_chrom_torch,
+                        'ICA': rppg_pytorch.process_signal_ica_torch,
+                        'SSR': rppg_pytorch.process_signal_ssr_torch,
+                        'GREEN': rppg_pytorch.process_signal_green_torch,
+                        'PCA': rppg_pytorch.process_signal_pca_torch,
+                        'PBV': rppg_pytorch.process_signal_pbv_torch,
+                        'LGI': rppg_pytorch.process_signal_lgi_torch,
+                        'OMIT': rppg_pytorch.process_signal_omit_torch,
+                        'SAMC': rppg_pytorch.process_signal_samc_torch,
+                        '2SR': rppg_pytorch.process_signal_2sr_torch,
+                    }
+                    if method in fn_map:
+                        bvp_tensor = fn_map[method](raw_signal, fps, device)
+                        if bvp_tensor is not None and len(bvp_tensor) > 0:
+                            filtered_bvp = bvp_tensor.cpu().numpy()
+                except Exception:
+                    pass
+
+            if len(filtered_bvp) == 0:
+                cpu_map = {
+                    'POS': process_signal_pos, 'CHROM': process_signal_chrom,
+                    'ICA': process_signal_ica, 'SSR': process_signal_ssr,
+                    'GREEN': process_signal_green, 'PCA': process_signal_pca,
+                    'PBV': process_signal_pbv, 'LGI': process_signal_lgi,
+                    'OMIT': process_signal_omit, 'SAMC': process_signal_samc,
+                    '2SR': process_signal_2sr,
+                }
+                if method in cpu_map:
+                    filtered_bvp = cpu_map[method](raw_signal, fps)
+
+            if len(filtered_bvp) > 0 and np.std(filtered_bvp) != 0:
+                norm_signal = (filtered_bvp - np.mean(filtered_bvp)) / np.std(filtered_bvp)
+                time_axis = np.arange(len(norm_signal)) / fps
+                plt.plot(time_axis, norm_signal, label=region_name, linewidth=1.0, alpha=0.7)
+                plotted += 1
+
+        video_name = os.path.splitext(os.path.basename(video_path))[0]
+        plt.title(f"{method} — rPPG Signals for All Regions\n({video_name})", fontsize=14, fontweight='bold')
+        plt.xlabel("Time (seconds)", fontsize=12)
+        plt.ylabel("Normalized Amplitude", fontsize=12)
+        if plotted > 0:
+            plt.legend(loc='upper right', fontsize=6, ncol=3)
+        plt.grid(True, linestyle='--', alpha=0.5)
+        plt.tight_layout()
+
+        plot_path = os.path.join(plots_dir, f"single_video_{method}.png")
+        plt.savefig(plot_path, dpi=150)
+        plt.close()
+        logger.info(f"  ✓ Saved single-video plot: {method} ({plotted} regions)")
+
+
 def main():
     parser = argparse.ArgumentParser(description='Batch process videos with rPPG algorithms')
     parser.add_argument('--video-dir', type=str, required=True, help='Directory containing videos')
@@ -406,15 +501,12 @@ def main():
         logger.info(f"Summary metrics saved to: {metrics_csv}")
     
     # Save raw signal data as .npy for Deep Learning
-    logger.info("Saving signal dataset to .npy file...")
-    dataset_to_save = {}
+    logger.info("Saving signal datasets to .npy files...")
+    dataset_to_save = {}  # Combined dataset covering all algorithms
     for region_name, methods_data in signal_collection.items():
         dataset_to_save[region_name] = {}
         for method, signals in methods_data.items():
             if len(signals) > 0:
-                # Convert list of signals to a single numpy array
-                # Note: signals are already normalized in _process_single_video
-                # We resample them here to ensure consistent shape for DL
                 resampled_batch = []
                 for sig in signals:
                     try:
@@ -423,12 +515,35 @@ def main():
                         continue
                 if resampled_batch:
                     dataset_to_save[region_name][method] = np.array(resampled_batch)
-    
+
     if dataset_to_save:
+        # 1. Combined dataset (all algorithms in one file)
         npy_path = plots_dir / "rppg_signals_dataset.npy"
         np.save(npy_path, dataset_to_save)
-        logger.info(f"Signal dataset saved to: {npy_path}")
-        logger.info(f"Dataset structure: {len(dataset_to_save)} regions, {len(RPPG_METHODS)} potential algorithms")
+        logger.info(f"Combined dataset saved to: {npy_path}")
+
+        # 2. Per-algorithm datasets (one file per algorithm, 11 files)
+        for method in RPPG_METHODS:
+            algo_dataset = {}
+            for region_name, methods_data in dataset_to_save.items():
+                if method in methods_data and len(methods_data[method]) > 0:
+                    algo_dataset[region_name] = methods_data[method]
+            if algo_dataset:
+                algo_npy_path = plots_dir / f"rppg_signals_{method}.npy"
+                np.save(algo_npy_path, algo_dataset)
+                logger.info(f"  ✓ Saved {method} dataset: {len(algo_dataset)} regions → {algo_npy_path.name}")
+
+        logger.info(f"Total .npy files: 1 combined + {len(RPPG_METHODS)} per-algorithm = {1 + len(RPPG_METHODS)} files")
+
+    # Generate single-video plots (one plot per algorithm, all regions overlaid)
+    # Pick one video at random from the processed set
+    if video_files:
+        import random
+        preview_video = str(random.choice(video_files))
+        logger.info(f"\nGenerating single-video algorithm plots for: {os.path.basename(preview_video)}")
+        generate_single_video_plots(
+            preview_video, regions_to_test, args.max_frames, str(plots_dir), use_gpu=args.use_gpu
+        )
     
     # Summary
     logger.info("")
