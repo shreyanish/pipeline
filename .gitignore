@@ -1,4 +1,7 @@
 data/
+papers/
+plots/
+ensemble_plots/
 .DS_Store
 __pycache__/
 *.pyc
