@@ -95,3 +95,12 @@ ALL_REGIONS = {
     # Region 30
     'left_lower_cheek': [425, 280, 330, 345, 346, 347, 348, 349, 350, 434, 432, 436, 426, 423],
 }
+# Landmark groups for SpO2 studies
+# Reference: apply 5 models and compare skin vs skin+face
+SKIN_FACE_REGIONS = list(ALL_REGIONS.keys())
+
+# Face only (non-skin regions): Eyes, nasal tip, temporal lobes (often noisy or have specific dynamics)
+FACE_REGIONS = ['right_eye', 'left_eye', 'nasal_tip', 'right_temporal_lobe', 'left_temporal_lobe']
+
+# Skin only: Exclude Face regions
+SKIN_REGIONS = [k for k in ALL_REGIONS.keys() if k not in FACE_REGIONS]
