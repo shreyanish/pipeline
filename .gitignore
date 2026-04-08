@@ -10,3 +10,5 @@ __pycache__/
 *.csv
 *.log
 *.png
+ground-truth/
+npy_data/
