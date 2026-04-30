@@ -12,3 +12,11 @@ __pycache__/
 *.png
 ground-truth/
 npy_data/
+pipeline_results/
+pipeline_results_1000/
+pipeline_results_new/
+test_ensemble_plots/
+bits-logo.png
+report*
+csf266*
+spo2/results/
